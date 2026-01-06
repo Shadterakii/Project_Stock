@@ -5,60 +5,56 @@ from datetime import datetime
 import os
 import time
 
-def clean_and_get_tickers(file_path):
+def get_tickers_from_excel(file_path):
     """
-    Reads the full HKEX list (e.g., 17k+ rows), removes delisted/invalid entries, 
-    and exports a clean master list to a new Excel file.
+    Reads the tickers directly from the provided clean Excel file.
+    Expects a column named 'Ticker' (e.g., '0001.HK').
     """
     try:
         print(f"Reading {file_path}...")
-        df = pd.read_excel(file_path, header=None)
+        df = pd.read_excel(file_path)
         
-        # Find the header row by looking for the "Stock Code" column name
+        # Check if 'Ticker' column exists (based on your file structure)
+        if 'Ticker' in df.columns:
+            tickers = df['Ticker'].tolist()
+            print(f"Successfully loaded {len(tickers)} tickers.")
+            return tickers
+        
+        # Fallback: Look for Stock Code if Ticker column is missing
+        print("Column 'Ticker' not found, searching for 'Stock Code'...")
+        # Find header row
         header_row_index = 0
         for i, row in df.iterrows():
             if "Stock Code" in row.values:
                 header_row_index = i
                 break
         
-        # Reload with correct headers
         df = pd.read_excel(file_path, skiprows=header_row_index)
-        
-        # 1. Filter out rows where 'Stock Code' is not a number
-        df = df[pd.to_numeric(df['Stock Code'], errors='coerce').notnull()]
-        
-        # 2. Convert codes to standard 4-digit strings for Yahoo Finance
-        df['Stock Code'] = df['Stock Code'].astype(int)
-        df['Ticker'] = df['Stock Code'].apply(lambda x: f"{str(x).zfill(4)}.HK")
-        
-        # 3. Export the clean list to a new file for your records
-        clean_file_name = "Clean_HK_Tickers.xlsx"
-        df.to_excel(clean_file_name, index=False)
-        print(f"Master list cleaned. Saved {len(df)} valid tickers to {clean_file_name}")
-        
-        return df['Ticker'].tolist()
+        if 'Stock Code' in df.columns:
+            df = df[pd.to_numeric(df['Stock Code'], errors='coerce').notnull()]
+            tickers = df['Stock Code'].astype(int).apply(lambda x: f"{str(x).zfill(4)}.HK").tolist()
+            print(f"Successfully generated {len(tickers)} tickers from Stock Codes.")
+            return tickers
+            
+        print("Error: Could not find 'Ticker' or 'Stock Code' columns.")
+        return []
     except Exception as e:
-        print(f"Error cleaning Excel file: {e}")
+        print(f"Error reading Excel file: {e}")
         return []
 
 def check_fundamentals(symbol):
     """
-    Checks if a specific ticker has listed options and 
-    if its P/E ratio is between 15 and 50.
+    Checks if its P/E ratio is between 15 and 50.
+    (Options existence is implied by the input file, but we keep the logic robust)
     """
     try:
         ticker_obj = yf.Ticker(symbol)
         info = ticker_obj.info
         
-        # Check for options availability
-        options_available = len(ticker_obj.options) > 0
-        if not options_available:
-            return False, None
-            
         # Check P/E Ratio (trailingPE)
         pe_ratio = info.get('trailingPE')
         
-        # Print PE and Ticker as requested
+        # Print PE and Ticker to terminal as requested
         if pe_ratio is not None:
             print(f"  [Fundamental Check] {symbol} | PE: {pe_ratio}")
         else:
@@ -72,9 +68,10 @@ def check_fundamentals(symbol):
     except:
         return False, None
 
-def screen_hk_stocks_batched(tickers, batch_size=100):
+def screen_hk_stocks_batched(tickers, batch_size=50):
     """
-    Screens HK tickers in batches with extended cooldowns to prevent rate limits.
+    Screens HK tickers in batches.
+    Batch size reduced to 50 for safety since the list is high-quality.
     """
     chunks = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
     results = []
@@ -91,7 +88,7 @@ def screen_hk_stocks_batched(tickers, batch_size=100):
                 try:
                     data = yf.download(
                         tickers=ticker_chunk,
-                        period="1mo", # Changed from 2mo to 1mo
+                        period="2mo",
                         group_by='ticker',
                         threads=True,
                         progress=False,
@@ -117,9 +114,11 @@ def screen_hk_stocks_batched(tickers, batch_size=100):
                                 max_price = stock_data['High'].max()
                                 pct_change = ((end_price - start_price) / start_price) * 100
                                 
-                                # Technical Criteria check
-                                if max_price > 10 and abs(pct_change) >= 10:
-                                    print(f"Technical match found: {symbol}. Checking options and P/E...")
+                                # --- MODIFIED CRITERIA ---
+                                # 1. Max Price > 10
+                                # 2. Absolute Change between 15% and 50%
+                                if max_price > 10 and 15 <= abs(pct_change) <= 50:
+                                    print(f"Technical match found: {symbol} ({pct_change:.2f}%). Checking P/E...")
                                     valid_fundamentals, pe_val = check_fundamentals(symbol)
                                     
                                     if valid_fundamentals:
@@ -127,7 +126,7 @@ def screen_hk_stocks_batched(tickers, batch_size=100):
                                             "Ticker": symbol,
                                             "Start Price": round(start_price, 2),
                                             "End Price": round(end_price, 2),
-                                            "Max Price (1mo)": round(max_price, 2),
+                                            "Max Price (2mo)": round(max_price, 2),
                                             "Change %": pct_change,
                                             "P/E Ratio": pe_val,
                                             "Has Options": "Yes"
@@ -135,19 +134,18 @@ def screen_hk_stocks_batched(tickers, batch_size=100):
                             except:
                                 continue
                     else:
-                        print("Received empty data, retrying in 30s...")
+                        print("Received empty data, retrying...")
                         retries += 1
-                        time.sleep(30)
+                        time.sleep(5)
 
                 except Exception as e:
                     print(f"Error in batch {chunk_index + 1}: {e}")
                     retries += 1
-                    time.sleep(30)
+                    time.sleep(5)
             
-            # Rate limiting cooldown - essential for long runs
+            # Small cooldown between batches
             if chunk_index < len(chunks) - 1:
-                print("Cooling down for 30 seconds...")
-                time.sleep(30)
+                time.sleep(2)
                 
     except KeyboardInterrupt:
         print("\nProcess interrupted by user. Saving current results...")
@@ -155,27 +153,20 @@ def screen_hk_stocks_batched(tickers, batch_size=100):
     return results
 
 if __name__ == "__main__":
-    excel_input = "Clean_HK_Tickers.xlsx" # Changed input file name
+    # Updated Input File
+    excel_input = "HK_Stocks_With_Options.xlsx"
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_output = f"screening_results_{timestamp}.xlsx"
     
-    # Configuration: How many tickers to skip
-    MAX_TICKERS_TO_SCAN = 4000
-    
     if os.path.exists(excel_input):
-        # Step 1: Clean the messy 17k list and export 'Clean_HK_Tickers.xlsx'
-        # (Since we are loading the clean file, this function will essentially just load it)
-        all_valid_tickers = clean_and_get_tickers(excel_input)
-        
-        # Step 2: Slice the list to scan 4000 to 8001
-        print(f"Scanning tickers from index {MAX_TICKERS_TO_SCAN} to 8001...")
-        tickers_to_scan = all_valid_tickers[MAX_TICKERS_TO_SCAN: 8001]
+        tickers_to_scan = get_tickers_from_excel(excel_input)
     else:
         print(f"File {excel_input} not found.")
         tickers_to_scan = []
 
     if tickers_to_scan:
-        matched_stocks = screen_hk_stocks_batched(tickers_to_scan, batch_size=100)
+        matched_stocks = screen_hk_stocks_batched(tickers_to_scan, batch_size=50)
         
         print("\n" + "="*50)
         print(f"SCREENING COMPLETE - Found {len(matched_stocks)} matches")

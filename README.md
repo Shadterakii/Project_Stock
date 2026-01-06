@@ -8,3 +8,5 @@ todo
 3. The price to earning ratio is between 15% - 50% (Done)
 4. the stock need to have options (Done)
 5. Currently having issue sorting the tickers with desire output
+6. Implement a script to save the option stocks to xlsx, instead of scaning the stock. (Done)
+7. Implement machine learning to predict the price change percent
