@@ -71,7 +71,7 @@ def check_fundamentals(symbol):
 def screen_hk_stocks_batched(tickers, batch_size=50):
     """
     Screens HK tickers in batches.
-    Batch size reduced to 50 for safety since the list is high-quality.
+    Batch size set to 50.
     """
     chunks = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
     results = []
@@ -88,7 +88,7 @@ def screen_hk_stocks_batched(tickers, batch_size=50):
                 try:
                     data = yf.download(
                         tickers=ticker_chunk,
-                        period="2mo",
+                        period="1mo", # Changed to 1 month
                         group_by='ticker',
                         threads=True,
                         progress=False,
@@ -109,28 +109,53 @@ def screen_hk_stocks_batched(tickers, batch_size=50):
                                 if stock_data.empty or len(stock_data) < 5:
                                     continue
                                 
+                                # --- 1 Month Calculations ---
                                 start_price = stock_data['Close'].iloc[0]
                                 end_price = stock_data['Close'].iloc[-1]
                                 max_price = stock_data['High'].max()
+                                min_price = stock_data['Low'].min()
+                                
                                 pct_change = ((end_price - start_price) / start_price) * 100
                                 
-                                # --- MODIFIED CRITERIA ---
-                                # 1. Max Price > 10
-                                # 2. Absolute Change between 15% and 50%
-                                if max_price > 10 and 15 <= abs(pct_change) <= 50:
-                                    print(f"Technical match found: {symbol} ({pct_change:.2f}%). Checking P/E...")
+                                # --- CRITERIA ---
+                                # 1. Max Price (1mo) > 10
+                                # 2. Absolute Change (1mo) between 15% and 25%
+                                if max_price > 10 and 15 <= abs(pct_change) <= 25:
+                                    print(f"Technical match found: {symbol} (1mo: {pct_change:.2f}%). Checking P/E...")
                                     valid_fundamentals, pe_val = check_fundamentals(symbol)
                                     
                                     if valid_fundamentals:
-                                        results.append({
+                                        # --- Monthly Breakdown Calculation ---
+                                        # Use a copy to calculate monthly stats without affecting original dataframe
+                                        monthly_df = stock_data.copy()
+                                        # Create a 'YearMonth' period column (e.g., 2023-10)
+                                        monthly_df['YearMonth'] = monthly_df.index.to_period('M')
+                                        # Group by month and get max High and min Low
+                                        monthly_stats = monthly_df.groupby('YearMonth').agg({'High': 'max', 'Low': 'min'})
+                                        # Sort descending to show newest months first
+                                        monthly_stats = monthly_stats.sort_index(ascending=False)
+
+                                        result_entry = {
                                             "Ticker": symbol,
-                                            "Start Price": round(start_price, 2),
-                                            "End Price": round(end_price, 2),
-                                            "Max Price (2mo)": round(max_price, 2),
-                                            "Change %": pct_change,
+                                            "Current Price": round(end_price, 2),
+                                            "Max Price (1mo)": round(max_price, 2),
+                                            "Min Price (1mo)": round(min_price, 2),
+                                            "Change % (1mo)": pct_change,
                                             "P/E Ratio": pe_val,
                                             "Has Options": "Yes"
-                                        })
+                                        }
+
+                                        # Add the monthly max/min to the result entry
+                                        count = 1
+                                        for idx, row in monthly_stats.iterrows():
+                                            # Since period is 1mo, this will likely only run once or twice
+                                            if count > 7: break 
+                                            month_str = str(idx) # e.g., '2023-10'
+                                            result_entry[f"{month_str} Max"] = round(row['High'], 2)
+                                            result_entry[f"{month_str} Min"] = round(row['Low'], 2)
+                                            count += 1
+
+                                        results.append(result_entry)
                             except:
                                 continue
                     else:
@@ -153,7 +178,7 @@ def screen_hk_stocks_batched(tickers, batch_size=50):
     return results
 
 if __name__ == "__main__":
-    # Updated Input File
+    # Input File
     excel_input = "HK_Stocks_With_Options.xlsx"
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -174,11 +199,16 @@ if __name__ == "__main__":
         
         if matched_stocks:
             df_results = pd.DataFrame(matched_stocks)
-            df_results['AbsChange'] = df_results['Change %'].abs()
-            df_results = df_results.sort_values(by='AbsChange', ascending=False).drop(columns=['AbsChange'])
             
+            # Sort by 1mo absolute change
+            if 'Change % (1mo)' in df_results.columns:
+                df_results['AbsChange'] = df_results['Change % (1mo)'].abs()
+                df_results = df_results.sort_values(by='AbsChange', ascending=False).drop(columns=['AbsChange'])
+            
+            # Format output strings
             display_df = df_results.copy()
-            display_df['Change %'] = display_df['Change %'].apply(lambda x: f"{x:.2f}%")
+            if 'Change % (1mo)' in display_df.columns:
+                display_df['Change % (1mo)'] = display_df['Change % (1mo)'].apply(lambda x: f"{x:.2f}%")
             
             print(display_df.to_string(index=False))
             
