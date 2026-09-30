@@ -1,0 +1,41 @@
+# Option time-value mispricing scanner configuration.
+# [scan], [liquidity] and [pricing] are defaults; any key can be overridden under [markets.<NAME>].
+
+[scan]
+market = "US"                  # default market when --market is not given
+min_dte = 7                    # days to expiry range to scan
+max_dte = 90
+moneyness = 0.20               # only strikes within +/-20% of spot
+option_types = ["call", "put"]
+
+[liquidity]
+min_bid = 0.01                 # bid must be above this
+min_volume = 10                # need volume >= min_volume OR open interest >= min_open_interest
+min_open_interest = 100
+max_spread_pct = 0.20          # (ask - bid) / mid
+
+[pricing]
+risk_free_rate = 0.04          # annual, continuous
+history_period = "1y"          # price history pulled for historical volatility
+min_hv_window = 20             # HV lookback = max(this, DTE converted to trading days)
+use_dividend_yield = true
+min_fair_time_value = 0.05     # ignore % diff when theoretical time value is below this
+mispricing_threshold = 0.30    # flag RICH/CHEAP when market time value is 30% above/below fair
+
+[report]
+output_dir = "results"
+top_n = 50                     # rows per RICH/CHEAP sheet
+print_top = 10                 # rows printed to the terminal
+
+[markets.US]
+provider = "yfinance"
+request_delay = 0.5            # seconds between Yahoo requests
+tickers = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "NFLX"]
+
+[markets.HK]
+# Yahoo returns no option chains for most .HK tickers; tickers without chains are skipped.
+# To get real HK data, implement an HK provider (e.g. Futu/IBKR) in option_scanner/providers/.
+provider = "yfinance"
+request_delay = 1.0
+risk_free_rate = 0.035
+tickers_file = "legacy/HK_Stocks_With_Options.xlsx"
